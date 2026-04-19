@@ -1,0 +1,7 @@
+# Development files
+.git/
+.github/
+.gitignore
+
+# Documentation source (README is kept)
+TODO.md
