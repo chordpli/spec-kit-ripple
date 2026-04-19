@@ -68,15 +68,18 @@ Fixes can create new problems. Ripple tracks this by re-scanning after each fix 
 
 This loop continues until findings stabilize. The `check` command explicitly scans for side effects introduced by the fixes themselves.
 
-## How Ripple Differs from Code Review
+## Complementary Perspectives
 
-| | Code Review (`review`, `staff-review`) | Ripple |
-|---|---|---|
-| **Analyzes** | The changed code itself | The impact on code that *wasn't* changed |
-| **Asks** | "Is this code good?" | "What did this change break elsewhere?" |
-| **Baseline** | None — evaluates code as-is | git merge-base — compares before/after |
-| **Pre-existing issues** | Reports them | Excludes them (causation test) |
-| **Best used** | Together — review catches code quality, Ripple catches ripple effects |
+Each post-implementation extension looks through a different lens. Ripple focuses on **change-induced ripple effects** — what your diff broke in code you didn't touch. Other extensions cover perspectives that Ripple intentionally leaves to them:
+
+| Perspective | Extension | What It Catches | Ripple's Focus |
+|---|---|---|---|
+| **Code quality & design** | `review`, `staff-review` | Naming, type safety, design patterns, code style | Impact on *untouched* code, not the changed code itself |
+| **Spec adherence** | `verify` | Whether implementation matches requirements | Side effects beyond the spec scope |
+| **Security audit** | `security-review` | Pre-existing vulnerabilities, OWASP patterns | Security regressions *introduced* by this change |
+| **Quality gate** | `cleanup` | Known issues, tech debt, scout rule fixes | Hidden problems tests won't catch |
+
+**Strongest when combined**: Code review catches design flaws in your change. Ripple catches what your change did to everything else. Neither alone covers both.
 
 ## Installation
 
