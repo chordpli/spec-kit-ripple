@@ -37,6 +37,37 @@ It analyzes across **9 categories**:
 
 Categories are **domain-agnostic** — they apply whether you're building a web API, CLI tool, mobile app, embedded system, data pipeline, or anything else. Security concerns (access control bypass, sensitive data exposure, privilege escalation) are covered as a cross-cutting lens within relevant categories rather than as a separate category. Domain-specific details are inferred from the actual codebase — Ripple adapts its analysis to the project's technology stack automatically.
 
+## Example Finding
+
+Each finding traces a causal chain from the change to its impact:
+
+```markdown
+#### R-001: Config file allows 20MB uploads but controller rejects above 10MB
+
+- **Category**: Configuration & Environment / Interface Contract
+- **Cause**: `application.yml` max-file-size raised to 20MB, but controller
+  still has `MAX_IMAGE_SIZE = 10MB` hardcoded
+- **Before**: Both limits were 10MB — consistent, uploads above 10MB rejected
+- **After**: Multipart accepts 20MB but controller immediately rejects >10MB
+  with a 400 error. The config change has no effect.
+- **Why Tests Miss It**: Tests use small fixtures; boundary tests at 10-20MB
+  range don't exist
+- **Recommendation**: Unify to a single config source
+- **Status**: OPEN
+```
+
+## Fix-Induced Detection
+
+Fixes can create new problems. Ripple tracks this by re-scanning after each fix cycle:
+
+```
+1st scan:  3 critical, 5 warning, 3 info    → fix all
+2nd scan:  1 critical, 4 warning, 6 info    → new issues from fixes
+3rd scan:  0 critical, 1 warning, 4 info    → converging
+```
+
+This loop continues until findings stabilize. The `check` command explicitly scans for side effects introduced by the fixes themselves.
+
 ## How Ripple Differs from Code Review
 
 | | Code Review (`review`, `staff-review`) | Ripple |
