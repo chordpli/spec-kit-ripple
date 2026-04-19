@@ -70,16 +70,22 @@ This loop continues until findings stabilize. The `check` command explicitly sca
 
 ## Complementary Perspectives
 
-Each post-implementation extension looks through a different lens. Ripple focuses on **change-induced ripple effects** — what your diff broke in code you didn't touch. Other extensions cover perspectives that Ripple intentionally leaves to them:
+Three post-implementation extensions share the `after_implement` hook, but each asks a fundamentally different question:
 
-| Perspective | Extension | What It Catches | Ripple's Focus |
+| | [`review`](https://github.com/ismaelJimenez/spec-kit-review) | [`staff-review`](https://github.com/arunt14/spec-kit-staff-review) | `ripple` |
 |---|---|---|---|
-| **Code quality & design** | `review`, `staff-review` | Naming, type safety, design patterns, code style | Impact on *untouched* code, not the changed code itself |
-| **Spec adherence** | `verify` | Whether implementation matches requirements | Side effects beyond the spec scope |
-| **Security audit** | `security-review` | Pre-existing vulnerabilities, OWASP patterns | Security regressions *introduced* by this change |
-| **Quality gate** | `cleanup` | Known issues, tech debt, scout rule fixes | Hidden problems tests won't catch |
+| **Asks** | "Does this code meet quality standards?" | "Can we ship this?" | "What did this change break elsewhere?" |
+| **Analyzes** | Changed code itself (quality, comments, tests, error handling, types, simplification) | Changed code vs. spec (security, performance, test coverage, ship verdict) | Impact on code that *wasn't* changed |
+| **Depth per finding** | Concise — flags the issue, recommends a fix | Concise — Blocker/Warning/Suggestion with ship verdict | Deep — Cause / Before / After / Blast Radius / Why Tests Miss It |
+| **Catches uniquely** | Design flaws, code style, type safety, pre-existing vulnerabilities, process gaps | Spec adherence gaps, overall test absence, ship/hold decision | Fix-induced regressions, causal chains across changes, implicit contract shifts |
 
-**Strongest when combined**: Code review catches design flaws in your change. Ripple catches what your change did to everything else. Neither alone covers both.
+When run on the same change set, findings fall into three groups:
+
+- **Overlap** — all tools catch the issue, but from different angles. Review flags it concisely; Ripple traces the causal chain (which change introduced it, what it looked like before, what's at risk now).
+- **Review/staff-review only** — pre-existing risks, design quality, validation logic errors, overall test absence, process gaps. Outside Ripple's delta-anchored scope by design.
+- **Ripple only** — fix-induced regressions that emerge from the *interaction* between changes, not from any single file. Review tools tend to miss these because they require tracing cause-and-effect across the diff.
+
+**Strongest when combined**: Review catches what's wrong with your change. Ripple catches what your change did to everything else. Running only one leaves blind spots.
 
 ## Installation
 
