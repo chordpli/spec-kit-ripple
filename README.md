@@ -2,6 +2,10 @@
 
 > Detect side effects that tests can't catch after implementation.
 
+![Spec Kit >= 0.2.0](https://img.shields.io/badge/spec--kit-%3E%3D0.2.0-blue)
+![Version 1.0.0](https://img.shields.io/badge/version-1.0.0-green)
+![License MIT](https://img.shields.io/badge/license-MIT-brightgreen)
+
 A [Spec Kit](https://github.com/github/spec-kit) community extension that analyzes your implementation for hidden ripple effects — the kind of side effects that pass all tests but break things in production.
 
 ## The Problem
@@ -68,34 +72,16 @@ Fixes can create new problems. Ripple tracks this by re-scanning after each fix 
 
 This loop continues until findings stabilize. The `check` command explicitly scans for side effects introduced by the fixes themselves.
 
-## Complementary Perspectives
-
-Three post-implementation extensions share the `after_implement` hook, but each asks a fundamentally different question:
-
-| | [`review`](https://github.com/ismaelJimenez/spec-kit-review) | [`staff-review`](https://github.com/arunt14/spec-kit-staff-review) | `ripple` |
-|---|---|---|---|
-| **Asks** | "Does this code meet quality standards?" | "Can we ship this?" | "What did this change break elsewhere?" |
-| **Analyzes** | Changed code itself (quality, comments, tests, error handling, types, simplification) | Changed code vs. spec (security, performance, test coverage, ship verdict) | Impact on code that *wasn't* changed |
-| **Depth per finding** | Concise — flags the issue, recommends a fix | Concise — Blocker/Warning/Suggestion with ship verdict | Deep — Cause / Before / After / Blast Radius / Why Tests Miss It |
-| **Catches uniquely** | Design flaws, code style, type safety, pre-existing vulnerabilities, process gaps | Spec adherence gaps, overall test absence, ship/hold decision | Fix-induced regressions, causal chains across changes, implicit contract shifts |
-
-When run on the same change set, findings fall into three groups:
-
-- **Overlap** — all tools catch the issue, but from different angles. Review flags it concisely; Ripple traces the causal chain (which change introduced it, what it looked like before, what's at risk now).
-- **Review/staff-review only** — pre-existing risks, design quality, validation logic errors, overall test absence, process gaps. Outside Ripple's delta-anchored scope by design.
-- **Ripple only** — fix-induced regressions that emerge from the *interaction* between changes, not from any single file. Review tools tend to miss these because they require tracing cause-and-effect across the diff.
-
-**Strongest when combined**: Review catches what's wrong with your change. Ripple catches what your change did to everything else. Running only one leaves blind spots.
-
 ## Installation
 
 ```bash
-# From GitHub
-git clone https://github.com/chordpli/spec-kit-ripple.git
-specify extension add --dev spec-kit-ripple/
+specify extension add ripple
+```
 
-# Verify
-specify extension list
+From repository directly:
+
+```bash
+specify extension add ripple --from https://github.com/chordpli/spec-kit-ripple/archive/refs/tags/v1.0.0.zip
 ```
 
 ## Commands
@@ -152,23 +138,27 @@ Ripple hooks into `after_implement` — after running `/speckit.implement`, you'
 Scan for untested side effects? (y/n)
 ```
 
-## Workflow
+## Workflow Position
 
 ```
-/speckit.specify  →  /speckit.plan  →  /speckit.tasks  →  /speckit.implement
-                                                                    ↓
-                                                     ┌──  /speckit.ripple.scan
-                                                     │              ↓
-                                                     │    /speckit.ripple.resolve
-                                                     │              ↓
-                                                     │    Implement fixes
-                                                     │              ↓
-                                                     │    /speckit.ripple.check
-                                                     │              ↓
-                                                     └── New findings? → loop back
-                                                                    ↓ No
-                                                          Merge with confidence
+/speckit.specify                        → spec.md
+/speckit.clarify                        → clarifications
+/speckit.plan                           → plan.md
+/speckit.tasks                          → tasks.md
+/speckit.implement                      → code
+                                          ↓ after_implement hook (optional)
+┌──  /speckit.ripple.scan               → ripple-report.md  ★
+│    /speckit.ripple.resolve            → ripple-fixes.md   ★
+│    Implement fixes
+│    /speckit.ripple.check              → updated report    ★
+│              ↓
+└── New findings? → loop back
+                                          ↓ No
+/speckit.checklist                      → verify
+Merge with confidence
 ```
+
+Spec Kit's core workflow goes from `/speckit.implement` directly to merge. This extension inserts a feedback loop after implementation: scan for side effects, decide how to fix them, verify the fixes, and repeat until findings stabilize.
 
 ## Artifacts
 
@@ -185,6 +175,25 @@ Scan for untested side effects? (y/n)
 | **WARNING** | Likely to cause bugs, degraded performance, or operational issues |
 | **INFO** | Potential concern worth reviewing — may be intentional or low-risk |
 
+## Complementary Perspectives
+
+Three post-implementation extensions share the `after_implement` hook. Each addresses a distinct concern:
+
+| | [`review`](https://github.com/ismaelJimenez/spec-kit-review) | [`staff-review`](https://github.com/arunt14/spec-kit-staff-review) | `ripple` |
+|---|---|---|---|
+| **Focus** | Code quality | Shipping readiness | Change impact |
+| **Analyzes** | Changed code (quality, tests, types, error handling) | Changed code vs. spec (security, performance, coverage) | Unmodified code affected by changes |
+| **Finding depth** | Concise | Concise with verdict | Detailed — causation, before/after, blast radius |
+| **Catches uniquely** | Design flaws, code style, pre-existing vulnerabilities, process gaps | Spec adherence gaps, overall test absence, ship/hold decision | Fix-induced regressions, causal chains across changes, implicit contract shifts |
+
+When run on the same change set, findings fall into three groups:
+
+- **Overlap** — all tools catch the issue, but from different angles. Review flags it concisely; Ripple traces the causal chain (which change introduced it, what it looked like before, what's at risk now).
+- **Review/staff-review only** — pre-existing risks, design quality, validation logic errors, overall test absence, process gaps. Outside Ripple's delta-anchored scope by design.
+- **Ripple only** — fix-induced regressions that emerge from the *interaction* between changes, not from any single file. Review tools tend to miss these because they require tracing cause-and-effect across the diff.
+
+**Strongest when combined**: Review catches what's wrong with your change. Ripple catches what your change did to everything else. Running only one leaves blind spots.
+
 ## Usage Tips
 
 | PR Size | Recommendation |
@@ -196,6 +205,15 @@ Scan for untested side effects? (y/n)
 
 Ripple reads the full diff plus blast radius files. Larger change sets consume more context. Use filters to keep scans focused.
 
+## Troubleshooting
+
+| Error | Solution |
+|-------|----------|
+| "Run `/speckit.tasks` first" | Generate tasks before running scan |
+| "Run `/speckit.ripple.scan` first" | Scan must run before resolve or check |
+| No findings generated | Verify implemented code exists on disk and git has commits ahead of merge-base |
+| Command not available | Check `specify extension list`, restart agent session, reinstall |
+
 ## Requirements
 
 - Spec Kit >= 0.2.0
@@ -204,4 +222,13 @@ Ripple reads the full diff plus blast radius files. Larger change sets consume m
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE)
+
+## Support
+
+- **Issues**: <https://github.com/chordpli/spec-kit-ripple/issues>
+- **Spec Kit**: <https://github.com/github/spec-kit>
+
+---
+
+*Extension Version: 1.0.0 | Spec Kit: >=0.2.0*
