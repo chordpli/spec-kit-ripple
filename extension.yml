@@ -3,12 +3,14 @@ schema_version: "1.0"
 extension:
   id: "ripple"
   name: "Ripple"
-  version: "1.0.0"
+  version: "1.1.0"
   description: "Detect side effects that tests can't catch after implementation — surface hidden ripple effects across 9 analysis categories"
   author: "chordpli"
   repository: "https://github.com/chordpli/spec-kit-ripple"
   license: "MIT"
   homepage: "https://github.com/chordpli/spec-kit-ripple"
+  effect: "read-write"
+  category: "code"
 
 requires:
   speckit_version: ">=0.2.0"
@@ -17,13 +19,10 @@ provides:
   commands:
     - name: "speckit.ripple.scan"
       file: "commands/speckit.ripple.scan.md"
-      description: "Analyze implementation for untested side effects and generate ripple-report.md"
     - name: "speckit.ripple.resolve"
       file: "commands/speckit.ripple.resolve.md"
-      description: "Interactively resolve ripple findings one by one — review cause, choose a fix strategy, and apply"
     - name: "speckit.ripple.check"
       file: "commands/speckit.ripple.check.md"
-      description: "Re-verify ripple report items and update resolution status"
 
 hooks:
   after_implement:

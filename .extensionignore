@@ -2,6 +2,8 @@
 .git/
 .github/
 .gitignore
+.claude/
+.omc/
 
 # Documentation source (README is kept)
 TODO.md

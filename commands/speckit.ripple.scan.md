@@ -1,5 +1,8 @@
 ---
 description: "Analyze implementation for untested side effects and generate ripple-report.md"
+scripts:
+  sh: scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks
+  ps: scripts/powershell/check-prerequisites.ps1 -Json -RequireTasks -IncludeTasks
 ---
 
 # Ripple Scan
@@ -16,36 +19,35 @@ This command is **NOT a general code review**. It answers one specific question:
 $ARGUMENTS
 ```
 
-Parse the user's input for an optional severity threshold:
+You **MUST** consider the user input before proceeding (if not empty).
+
+Parse the user's input for optional arguments:
 
 | Keyword | Behavior |
 |---------|----------|
 | _(default)_ | Report all findings (critical, warning, info) |
 | `critical` | Only report critical-severity findings |
 | `--diff` | Incremental scan — only files changed since the last scan |
+| `--base <ref>` | Compare against `<ref>` instead of the auto-detected base branch |
 
 Examples:
 - `/speckit.ripple.scan` — full scan, all severities
 - `/speckit.ripple.scan critical` — critical issues only
 - `/speckit.ripple.scan --diff` — incremental scan on changed files
+- `/speckit.ripple.scan --base develop` — feature was branched off `develop`
 
 ## Workflow
 
 ### Step 1: Load Context
 
-Run the prerequisites check from the repository root:
+Run `{SCRIPT}` from the repository root and parse `FEATURE_DIR` and `AVAILABLE_DOCS` from its JSON output. The script validates that `tasks.md` exists — if it reports an error, surface it and stop.
 
-```bash
-.specify/scripts/bash/check-prerequisites.sh --json --paths-only
-```
-
-Parse `FEATURE_DIR` from the output. Then load the following artifacts from that directory:
+Then load from `FEATURE_DIR`:
 
 - **Required**: `tasks.md`, `spec.md`, `plan.md`
-- **Optional**: `blueprint.md`, `data-model.md`, `contracts/` directory, `checklist.md`
-- **Optional**: `ripple-report.md` (previous scan — used for delta comparison)
-
-If `tasks.md` is missing, abort with: "Run `/speckit.tasks` first."
+- **Optional** (when listed in `AVAILABLE_DOCS`): `data-model.md`, `contracts/`, `checklists/`
+- **Optional**: `blueprint.md` (produced by the spec-kit-blueprint companion extension, if installed)
+- **Optional**: `ripple-report.md` (previous scan — merged into, never overwritten; see Step 5)
 
 ### Step 2: Establish Baseline and Identify Changes
 
@@ -53,56 +55,71 @@ If `tasks.md` is missing, abort with: "Run `/speckit.tasks` first."
 
 #### 2a: Determine the Baseline
 
-Identify the branch point (where the feature branch diverged from the base branch):
+Resolve the base branch, then the branch point:
+
+1. If the user passed `--base <ref>`, use that ref.
+2. Otherwise run `git symbolic-ref --quiet --short refs/remotes/origin/HEAD` to get the remote's default branch (e.g. `origin/main`).
+3. If that returns nothing, probe `origin/main`, `origin/master`, `origin/develop`, `main`, `master` in order and use the first ref that `git rev-parse --verify --quiet <ref>` confirms exists.
+
+Compute the baseline commit — referred to as **BASE** below:
 
 ```bash
-git merge-base HEAD main
+git merge-base HEAD {resolved-ref}
 ```
 
-This commit represents the state of the codebase **before** implementation. All analysis must be relative to this point.
+**Guard**: if no ref resolves, or `git merge-base` fails or returns nothing, ABORT with: "ERROR: could not determine a baseline (no main/master/develop found and no `--base` given). Re-run with `--base <ref>`." Never analyze without a before-state.
+
+BASE represents the state of the codebase **before** implementation. All analysis must be relative to this point.
 
 #### 2b: Extract the Change Set
 
-Get the precise list of files changed by the implementation:
+The after-state is the **working tree**, not HEAD — `/speckit.implement` typically leaves changes uncommitted. Never restrict the diff to committed history (`..HEAD`).
+
+Run both:
 
 ```bash
-git diff --name-status $(git merge-base HEAD main)..HEAD
+git diff --name-status -M -C {BASE}           # committed + staged + unstaged changes vs. baseline
+git ls-files --others --exclude-standard      # untracked files — treat as status A
 ```
 
-This produces the **change set** — the files that were Added (A), Modified (M), or Deleted (D) by the implementation. These are the **cause** of potential ripple effects.
+This produces the **change set** — the files changed by the implementation. They are the **cause** of potential ripple effects. Status letters: `A` added, `M` modified, `D` deleted, `T` type change, plus `R`/`C` (rename/copy — a three-field row `R100 old/path new/path`; analyze the **new** path, and treat the move itself as a potential Interface Contract ripple for anything that still references the old path).
 
-Also cross-reference with `tasks.md` to understand the **intent** behind each change.
+**Empty guard**: if both commands return nothing, STOP and report: "No changes detected relative to {BASE}. Confirm you are on the feature branch and the implementation exists on disk." Do NOT generate a report from an empty diff.
 
-**`--diff` (incremental) mode**: If the `--diff` flag is set and a previous `ripple-report.md` exists:
+Cross-reference the change set with `tasks.md` to understand the **intent** behind each change.
 
-1. Read the `**Scanned**:` timestamp from the existing report header
-2. Narrow the change set to files modified **after** that timestamp using:
-   ```bash
-   git log --since="{scanned_datetime}" --name-only --pretty=format: HEAD -- {files_in_change_set}
-   ```
-3. Only analyze files that appear in both the original change set (vs. merge-base) AND were modified after the last scan
-4. Carry over all existing findings from the previous report — do not re-analyze them unless their files appear in the narrowed set
-5. If no files were modified since the last scan, report: "No changes since last scan. Run without `--diff` for a full re-scan."
+**`--diff` (incremental) mode** — anchors on the previous report's `**Scanned-Commit**` header:
+
+1. If the report has no `**Scanned-Commit**` header (generated by a pre-1.1.0 scan), `--diff` cannot anchor an incremental set — fall back to a full scan and note in the report: "previous report predates commit-anchored diffs; ran a full re-scan."
+2. Read the recorded SHA and verify it still exists: `git cat-file -e {sha}^{commit}`. If it doesn't (e.g. rebased away), fall back to a full scan and note why in the report.
+3. Incremental set = `git diff --name-status -M -C {sha}` plus `git ls-files --others --exclude-standard` (untracked files are invisible to `git diff` — include them so new files created since the last scan survive the intersection below). This is immune to rebase/amend timestamp rewrites and sees uncommitted edits. Files committed unchanged since the last scan may re-appear; re-analyzing them is safe — missing them is not.
+4. Analyze only files present in BOTH the change set from 2b AND the incremental set.
+5. Carry over all other findings from the previous report unchanged.
+6. If the incremental set is empty, report: "No changes since last scan ({short sha}). Run without `--diff` for a full re-scan." and stop.
 
 #### 2c: Identify the Blast Radius
 
-For each file in the change set, identify files that **depend on it** but were **not part of the change set**:
+For each file in the change set, find its **dependents** — files outside the change set that consume it:
 
-- Files that import, reference, or call into the changed file
-- Files that share state, configuration, or data structures with the changed file
-- Files that consume the output (API responses, events, messages) of the changed code
+1. From each diff hunk, collect the changed exported symbols (function/class/constant names) and the module's import path or basename.
+2. Search the repository for those symbols and import paths using language-appropriate patterns (`import`, `require`, `from`, `use`, `#include`, configuration references), excluding the change set itself.
+3. **Read each candidate file.** A Blast Radius entry is valid only if you opened the dependent and confirmed it consumes the changed behavior. Never list a file you did not read.
 
-These dependents are where ripple effects manifest. Read them to understand what assumptions they make about the changed code.
+The blast radius also includes **non-code dependents** the diff puts at risk: data persisted by the prior version that the new code must still read, caches holding old-format values across a deploy, in-flight queue messages, and old-version instances running during a rolling deploy.
+
+These dependents are where ripple effects manifest. Read them to understand what assumptions they make about the changed code. Trace at least one level of dependents for every changed file; when a finding looks CRITICAL, trace a second level (the dependents of the dependents).
 
 #### 2d: Read the Diffs
 
 For each changed file, read the actual diff to understand **what specifically changed**:
 
 ```bash
-git diff $(git merge-base HEAD main)..HEAD -- {file_path}
+git diff -M -C {BASE} -- {file_path}
 ```
 
-Understanding the specific lines changed is essential. A finding must trace back to a specific diff hunk, not just "this file was modified."
+For untracked files, read the whole file as added content. For binary files (shown as `-	-` in `git diff --numstat {BASE}`), record the add/modify/delete at file granularity and state that hunk-level tracing is not possible — never fabricate line-level causes. Report a submodule pointer change as a Configuration & Environment concern (coordinated-deploy risk), not as hunk analysis.
+
+Understanding the specific change is essential. A finding must trace back to a specific change — a diff hunk for line-level edits, or the file-level add/modify/delete/rename/submodule change where no hunks exist (binary files, pure renames, submodule bumps) — not just "this file was modified."
 
 ### Step 3: Analyze Across 9 Categories
 
@@ -112,9 +129,9 @@ For each change in the diff, trace its impact on the blast radius files. The ana
 Specific change (diff hunk) → Affected dependent (blast radius file) → Side effect (what breaks or becomes risky)
 ```
 
-**Causation test**: Before reporting a finding, ask: *"If this implementation had not been made, would this problem exist?"* If the answer is YES, it is a pre-existing issue — do NOT report it. Only report issues that were **introduced or worsened** by the current changes.
+**Causation test**: Before reporting a finding, ask: *Would this problem exist in its current form and severity if the change had not been made?* If it existed and the change did not affect it — it is pre-existing, do NOT report it. If the change introduced it OR measurably worsened it — report it, stating the before/after severity delta.
 
-Apply all 9 categories — skip a category only if it is genuinely irrelevant to the change.
+Work through all 9 categories for each change. Finding nothing in a category is the normal outcome for most diffs — move on; never invent a finding to fill a category. **Zero findings overall is a valid, successful result.**
 
 ---
 
@@ -125,6 +142,7 @@ Trace how the change altered the way data enters, transforms, and exits the code
 **Look for changes that:**
 - Altered the shape, type, or encoding of data that downstream consumers still expect in the old format
 - Added/removed fields in a serialization path without updating the deserialization counterpart
+- Changed a persisted format or schema so that data written **before** this change no longer round-trips (deserializes to null/defaults, or throws)
 - Introduced implicit type coercion or precision loss that didn't exist before
 - Changed what happens to invalid/missing data (e.g., previously rejected, now silently default-filled)
 - Broke an assumption a dependent module had about data ordering, nullability, or completeness
@@ -138,16 +156,16 @@ Examine how the change introduced new state mutations or altered object lifetime
 
 **Look for changes that:**
 - Introduced new shared/global state mutation that outlives the operation's intended scope
-- Added resource acquisition (handles, connections, locks) without corresponding release
+- Added resource acquisition (handles, connections, locks) on a code path introduced or changed by this diff without a corresponding release — only if the leak is new or worsened; do not flag pre-existing leaks in touched files
 - Created a new initialization order dependency that didn't exist before
 - Removed or reordered lifecycle hooks/teardown logic that dependents relied on
-- Invalidated caches or memoization by changing the data they were built from
+- Changed the data a specific cache or memo is derived from, leaving its entries stale — name the cache
 
 ---
 
 #### Category 3: Interface Contract
 
-Check whether the change altered — explicitly or implicitly — the contract that other modules depend on.
+Check whether the change altered — explicitly or implicitly — the contract that other modules depend on. (Boundary with Data Flow: Interface Contract = the call-site contract changed — signature, pre/postconditions, return semantics; Data Flow = the shape/content/validity of the data itself changed.)
 
 **Look for changes that:**
 - Modified a method/function signature in a way that compiles but shifts semantics for callers
@@ -206,9 +224,10 @@ Check whether the change introduced new configuration or deployment requirements
 **Look for changes that:**
 - Added new environment variables, config keys, or feature flags without documenting or defaulting them
 - Introduced environment-specific behavior (dev vs. staging vs. production) that isn't accounted for
-- Changed dependency versions that require coordinated deployment with other services
+- Changed dependency versions that require coordinated deployment — or that silently change the behavior of unmodified code that calls them
 - Added new files or modules not included in build/package configuration
 - Created new migration or deployment ordering requirements not captured anywhere
+- Made the deploy non-rollback-safe or created a mixed-version window — new-format data the prior version can't read, or old/new instances exchanging incompatible data during rollout
 - Relaxed security-related configuration (access controls, trust boundaries, encryption settings, rate limits) that was stricter before
 
 ---
@@ -252,17 +271,29 @@ For each finding, assign a severity:
 | **WARNING** | Likely to cause bugs, degraded performance, or operational issues |
 | **INFO** | Potential concern worth reviewing — may be intentional or low-risk |
 
+Severity reflects worst-case impact **if the side effect is real**; confidence is tracked separately. If you cannot confirm a suspected side effect actually fires, do not drop it and do not downgrade it — assign severity by impact-if-real and add a `Confidence: low` line to the finding stating what evidence you could not obtain. INFO is for confirmed side effects whose blast radius is trivial or already guarded — never a stand-in for uncertainty.
+
 ### Step 5: Generate ripple-report.md
 
-Create `specs/{feature}/ripple-report.md` with the following structure:
+Create `specs/{feature}/ripple-report.md` — or **merge into it** if it already exists:
+
+- Preserve every existing finding, its ID, its current status, and all Resolution History / Check History sections.
+- A full re-scan re-evaluates existing OPEN findings (update them in place) and **appends** newly discovered findings. It MUST NOT reset any non-OPEN finding back to OPEN, renumber anything, or drop history.
+- Finding IDs are globally monotonic across all commands and modes: next ID = highest `R-{NNN}` present in the report + 1, never reused. Start at `R-001` only when no previous report exists.
+- If the scan ran with the `critical` filter, add a header note: `> critical-only scan — WARNING/INFO not analyzed; run a full scan to complete the matrix.`
+- Inversely, when a full scan (no `critical` filter) merges into a report carrying that note, remove the note and replace every "—" matrix cell with a real count now that WARNING/INFO have been analyzed.
+
+For the header's `**Branch**` field, use `git rev-parse --abbrev-ref HEAD`; if it returns `HEAD` (detached), use the short commit SHA (`git rev-parse --short HEAD`).
 
 ````markdown
 # Ripple Report: {Feature Name}
 
 **Branch**: `{branch}` | **Scanned**: {datetime}
-**Baseline**: `{merge-base commit short hash}` (branch point from {base branch})
+**Baseline**: `{BASE short hash}` (branch point from {base branch})
+**Scanned-Commit**: `{full HEAD SHA at scan time}`
 **Change Set**: {N} files changed | **Blast Radius**: {M} dependents checked
-**Findings**: {critical} critical, {warning} warning, {info} info
+**Findings**: {critical} critical, {warning} warning, {info} info (cumulative — never decremented)
+**Status**: {open} open, {planned} planned, {accepted} accepted-risk, {resolved} resolved, {mitigated} mitigated, {worsened} worsened, {stale} stale
 
 ## Summary
 
@@ -274,13 +305,14 @@ Create `specs/{feature}/ripple-report.md` with the following structure:
 
 #### R-{NNN}: {Brief title}
 
-- **Category**: {category name}
+- **Category**: {exactly one primary category}
 - **Cause**: {What specific change (file + diff hunk) introduced this side effect}
-- **Affected**: `{path/to/affected/file}` (line ~{N}) — the code that is now at risk
+- **Affected**: `{path/to/affected/file}` › `{symbol}` (≈line {N}) — the code that is now at risk
 - **Blast Radius**: `{other_affected_1}`, `{other_affected_2}`
-- **Before**: {How this behaved before the change}
+- **Before**: {How this behaved before the change — grounded in the removed hunk lines or the BASE version}
 - **After**: {How this behaves now — and why that's a problem}
-- **Why Tests Miss It**: {Why existing or typical tests won't catch this}
+- **Why Tests Miss It**: {The concrete test gap — checked against the actual test suite}
+- **Confidence**: low — {what could not be verified} _(include this line only when you could not confirm the effect fires)_
 - **Recommendation**: {Concrete action to mitigate}
 - **Status**: OPEN
 
@@ -311,12 +343,12 @@ Create `specs/{feature}/ripple-report.md` with the following structure:
 | Interface Contract | {count} | {count} | {count} | |
 | Resource & Performance | {count} | {count} | {count} | |
 | Concurrency | {count} | {count} | {count} | |
-| Distributed Coordination | | | | N/A — single-process |
+| Distributed Coordination | {count} | {count} | {count} | |
 | Configuration & Environment | {count} | {count} | {count} | |
 | Error Propagation | {count} | {count} | {count} | |
 | Observability | {count} | {count} | {count} | |
 
-> Mark a category as "N/A" only with a brief justification (e.g., no distributed components involved).
+> The matrix counts all findings by severity regardless of status. Mark a category "N/A" only after confirming the system has no such surface at all (e.g. no cross-process or cross-service boundary anywhere in the project), and state the specific reason. In a `critical`-filtered scan, fill WARNING/INFO cells with "—" (not analyzed), never 0.
 
 ## Next Steps
 
@@ -325,25 +357,30 @@ Create `specs/{feature}/ripple-report.md` with the following structure:
 - [ ] Run `/speckit.ripple.check` after fixes to verify resolution
 ````
 
+As a finding moves through its lifecycle, `resolve` appends a `**Resolution Strategy**` line and `check` appends a `**Resolution**` line to the finding block — a mature finding carries the base fields above plus these.
+
 ### Step 6: Report
 
 Output a summary:
 - Path to the generated `ripple-report.md`
 - Finding counts by severity
-- Top 3 highest-risk findings highlighted
+- Up to 3 highest-risk findings highlighted
 - Suggested next step (e.g., "Address 2 CRITICAL findings, then run `/speckit.ripple.check`")
 
 ## Rules
 
-- **Delta-anchored (MOST IMPORTANT)**: Every finding MUST be causally linked to a specific change in the implementation diff. Ask: *"If this implementation had not been made, would this problem exist?"* If YES → do NOT report it. Pre-existing issues, general code smells, and hypothetical future problems are out of scope. This is not a code review.
-- **Before/After required**: Each finding must describe what the behavior was BEFORE the change and what it is AFTER. If you cannot articulate both states, the finding is not a side effect — it's a general observation.
-- **Evidence-based**: Every finding must reference both the causing diff hunk AND the affected code (file, line, function). No vague warnings.
+- **Delta-anchored (MOST IMPORTANT)**: Every finding MUST be causally linked to a specific change in the implementation diff. If a problem existed before the change and the change did not affect it, do NOT report it; if the change introduced or measurably worsened it, report it. Pre-existing issues, general code smells, and hypothetical future problems are out of scope. This is not a code review.
+- **Before/After grounded in evidence**: Each finding must describe behavior BEFORE and AFTER the change, and the before-state must be grounded in code you actually read — the removed (`-`) hunk lines or the baseline version via `git show {BASE}:{path}`. If you cannot ground both states, it is a general observation, not a side effect — do not report it.
+- **Evidence-based**: Every finding must reference both the causing change (diff hunk — or the file-level add/delete/rename/submodule bump where no hunks exist) AND the affected code (file, symbol, approximate line). No vague warnings.
+- **Why Tests Miss It, concretely**: Before writing this field, search the test suite for the changed symbols. If a test already covers the side effect, drop the finding — the goal is to find what tests *miss*. Otherwise name the concrete gap (fixture too small, dependency mocked away, boundary not exercised, timing/order not reproduced) — never just "untested".
+- **One primary category per finding**: Assign exactly one category — the *mechanism* of the side effect; mention secondary lenses in prose only (for the Data Flow / Interface Contract boundary, see Category 3).
+- **Zero findings ≠ empty scan**: A zero-finding report is valid only when the diff was non-empty and fully analyzed. An empty or failed diff aborts with an explanation — never a clean report.
+- **Status vocabulary (one state machine; each command owns its transitions)**: Non-terminal = `OPEN`, `RESOLUTION_PLANNED`, `MITIGATED`, `WORSENED` (check re-verifies all of these; resolve queues `OPEN`/`WORSENED` by default); terminal = `RESOLVED`, `ACCEPTED_RISK`, `STALE` (skipped unless explicitly named by ID). scan creates findings as OPEN; resolve sets RESOLUTION_PLANNED or ACCEPTED_RISK; check sets RESOLVED, MITIGATED, WORSENED, STALE — or back to OPEN.
+- **Merge, never overwrite**: When a previous `ripple-report.md` exists, merge as described in Step 5 — preserve IDs, statuses, and history sections; never renumber or silently drop findings.
 - **No false confidence**: If a category cannot be fully analyzed (e.g., no access to runtime behavior), state the limitation explicitly in the report.
 - **Project-agnostic categories**: Apply categories based on what the code actually does, not what domain it belongs to. A CLI tool can have concurrency issues; an embedded system can have interface contract problems.
-- **Respect existing tests**: If a test already covers a specific side effect, do not report it. The goal is to find what tests *miss*, not duplicate their coverage.
 - **Severity honesty**: CRITICAL means "will likely break production." Do not inflate severity for attention.
-- **Incremental-friendly**: When a previous `ripple-report.md` exists, note which findings are new vs. carried over. Never silently drop previous findings — mark them as RESOLVED if the code has changed to address them.
 - **Read before judging**: Before flagging a side effect, read the actual implementation of the affected code AND its dependents. Do not assume behavior from names or signatures alone.
-- **Blast radius completeness**: For each changed file, trace at least one level of dependents (files that import/reference it). For CRITICAL findings, trace two levels.
-- **Scale-aware analysis**: For large change sets (16+ files), prioritize depth over breadth — focus blast radius tracing on the most structurally significant changes (shared modules, interfaces, configuration) rather than trying to trace every file equally. When `critical` filter is active, skip WARNING/INFO analysis entirely to conserve context.
+- **Blast radius completeness**: Trace dependents to the depth specified in Step 2c — one level for every changed file, two for CRITICAL findings.
+- **Scale-aware analysis**: For large change sets (16+ files), prioritize depth over breadth — focus blast radius tracing on the most structurally significant changes (shared modules, interfaces, configuration) rather than trying to trace every file equally. When the `critical` filter is active, skip WARNING/INFO analysis entirely to conserve context, fill their matrix cells with "—", and add the header note from Step 5.
 - **Language of the report**: Follow the language used in existing spec/plan/tasks documents.

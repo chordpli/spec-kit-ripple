@@ -3,7 +3,7 @@
 > Detect side effects that tests can't catch after implementation.
 
 ![Spec Kit >= 0.2.0](https://img.shields.io/badge/spec--kit-%3E%3D0.2.0-blue)
-![Version 1.0.0](https://img.shields.io/badge/version-1.0.0-green)
+![Version 1.1.0](https://img.shields.io/badge/version-1.1.0-green)
 ![License MIT](https://img.shields.io/badge/license-MIT-brightgreen)
 
 A [Spec Kit](https://github.com/github/spec-kit) community extension that analyzes your implementation for hidden ripple effects — the kind of side effects that pass all tests but break things in production.
@@ -48,9 +48,12 @@ Each finding traces a causal chain from the change to its impact:
 ```markdown
 #### R-001: Config file allows 20MB uploads but controller rejects above 10MB
 
-- **Category**: Configuration & Environment / Interface Contract
+- **Category**: Configuration & Environment
 - **Cause**: `application.yml` max-file-size raised to 20MB, but controller
   still has `MAX_IMAGE_SIZE = 10MB` hardcoded
+- **Affected**: `src/controllers/UploadController.java` › `validateUpload()` (≈line 42)
+- **Blast Radius**: any client told 20MB is now allowed; API docs generated
+  from config
 - **Before**: Both limits were 10MB — consistent, uploads above 10MB rejected
 - **After**: Multipart accepts 20MB but controller immediately rejects >10MB
   with a 400 error. The config change has no effect.
@@ -75,13 +78,13 @@ This loop continues until findings stabilize. The `check` command explicitly sca
 ## Installation
 
 ```bash
-specify extension add ripple
+specify extension add ripple --from https://github.com/chordpli/spec-kit-ripple/archive/refs/tags/v1.1.0.zip
 ```
 
-From repository directly:
+Once Ripple is listed in the Spec Kit community catalog:
 
 ```bash
-specify extension add ripple --from https://github.com/chordpli/spec-kit-ripple/archive/refs/tags/v1.0.0.zip
+specify extension add ripple
 ```
 
 ## Commands
@@ -91,10 +94,13 @@ specify extension add ripple --from https://github.com/chordpli/spec-kit-ripple/
 Analyze implementation for untested side effects.
 
 ```bash
-/speckit.ripple.scan              # Full scan, all severities
-/speckit.ripple.scan critical     # Critical findings only
-/speckit.ripple.scan --diff       # Incremental scan on changed files
+/speckit.ripple.scan                 # Full scan, all severities
+/speckit.ripple.scan critical        # Critical findings only
+/speckit.ripple.scan --diff          # Incremental scan on changed files
+/speckit.ripple.scan --base develop  # Feature was branched off develop
 ```
+
+The baseline is detected automatically (remote default branch, then `origin/main`/`origin/master`/`origin/develop`, then local `main`/`master`); use `--base <ref>` to override. The scan diffs the **working tree** against the baseline, so uncommitted implementation changes are included.
 
 **Produces**: `specs/{feature}/ripple-report.md`
 
@@ -103,7 +109,7 @@ Analyze implementation for untested side effects.
 Interactively walk through findings and decide how to fix each one.
 
 ```bash
-/speckit.ripple.resolve             # Resolve all open findings, CRITICAL first
+/speckit.ripple.resolve             # Resolve open + worsened findings, CRITICAL first
 /speckit.ripple.resolve critical    # Resolve critical findings only
 /speckit.ripple.resolve R-001 R-003 # Resolve specific findings
 /speckit.ripple.resolve --dry-run   # Preview options without recording decisions
@@ -114,14 +120,14 @@ For each finding, Ripple presents:
 2. 2-4 concrete resolution options with tradeoffs (minimal fix, structural fix, skip)
 3. A recommended option with reasoning
 
-You pick an option, describe your own approach, or skip. Decisions are recorded in `ripple-report.md`, and fix plans are saved to `specs/{feature}/ripple-fixes.md` — ready for `/speckit.implement` to consume.
+You pick an option, describe your own approach, or skip. Decisions are recorded in `ripple-report.md`, and fix plans are saved to `specs/{feature}/ripple-fixes.md` — a derived view of the report holding only plans still awaiting application. Point `/speckit.implement` at that file to apply them, or implement manually.
 
 ### `/speckit.ripple.check`
 
 Re-verify findings after fixes have been applied.
 
 ```bash
-/speckit.ripple.check             # Re-check all open findings
+/speckit.ripple.check             # Re-check all non-terminal findings
 /speckit.ripple.check critical    # Re-check critical findings only
 /speckit.ripple.check R-001 R-005 # Re-check specific findings
 ```
@@ -130,6 +136,8 @@ Re-verify findings after fixes have been applied.
 
 Crucially, check also detects **fix-induced side effects** — new problems created by the fixes themselves. If a fix introduced a new risk, check will catch it and add it as a new finding.
 
+check ends with a **convergence verdict**: CONVERGED when no findings await action, NOT CONVERGED with a breakdown otherwise — so you know when the loop is done, independent of the critical-path message.
+
 ## Hook
 
 Ripple hooks into `after_implement` — after running `/speckit.implement`, you'll be prompted:
@@ -137,6 +145,8 @@ Ripple hooks into `after_implement` — after running `/speckit.implement`, you'
 ```
 Scan for untested side effects? (y/n)
 ```
+
+The hook fires after *every* `/speckit.implement` run — including the one that applies Ripple fix plans. At that point in the loop the right command is `/speckit.ripple.check` (it alone transitions planned findings and runs fix-induced analysis), so run it explicitly; answering "y" to the scan prompt won't verify your fixes.
 
 ## Workflow Position
 
@@ -165,7 +175,7 @@ Spec Kit's core workflow goes from `/speckit.implement` directly to merge. This 
 | File | Created by | Purpose |
 |------|-----------|---------|
 | `specs/{feature}/ripple-report.md` | `scan`, updated by `resolve` and `check` | Side effect findings, resolution history, check history |
-| `specs/{feature}/ripple-fixes.md` | `resolve` | Implementation guidance for each fix — bridge to `/speckit.implement` |
+| `specs/{feature}/ripple-fixes.md` | `resolve`, refreshed by `check` | Fix plans still awaiting application — a derived view of the report (status lives only in `ripple-report.md`). Point `/speckit.implement` at it, or implement manually |
 
 ## Severity Levels
 
@@ -201,7 +211,8 @@ When run on the same change set, findings fall into three groups:
 | Small (1-5 files) | `/speckit.ripple.scan` — full scan |
 | Medium (6-15 files) | `/speckit.ripple.scan` — full scan, consider `critical` filter if findings are noisy |
 | Large (16+ files) | `/speckit.ripple.scan critical` — start with critical only, then expand if needed |
-| Re-scan after fixes | `/speckit.ripple.scan --diff` — incremental scan on changed files only |
+| After fixes | `/speckit.ripple.check` — it alone verifies findings, detects WORSENED, and runs fix-induced analysis |
+| After further changes | `/speckit.ripple.scan --diff` — incremental scan to find *new* side effects in files changed since the last scan |
 
 Ripple reads the full diff plus blast radius files. Larger change sets consume more context. Use filters to keep scans focused.
 
@@ -211,7 +222,7 @@ Ripple reads the full diff plus blast radius files. Larger change sets consume m
 |-------|----------|
 | "Run `/speckit.tasks` first" | Generate tasks before running scan |
 | "Run `/speckit.ripple.scan` first" | Scan must run before resolve or check |
-| No findings generated | Verify implemented code exists on disk and git has commits ahead of merge-base |
+| No findings generated | Confirm the implementation exists on disk and there are committed/staged/unstaged/untracked changes vs. the base branch; if your default branch isn't `main`/`master`/`develop`, pass `--base <ref>` |
 | Command not available | Check `specify extension list`, restart agent session, reinstall |
 
 ## Requirements
@@ -231,4 +242,4 @@ MIT — see [LICENSE](LICENSE)
 
 ---
 
-*Extension Version: 1.0.0 | Spec Kit: >=0.2.0*
+*Extension Version: 1.1.0 | Spec Kit: >=0.2.0*
