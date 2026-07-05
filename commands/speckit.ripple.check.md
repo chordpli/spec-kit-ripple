@@ -36,7 +36,7 @@ Examples:
 
 ### Step 1: Load Context
 
-Run `{SCRIPT}` from the repository root and parse `FEATURE_DIR` from the JSON output. Then load:
+Run `{SCRIPT}` from the repository root and parse `FEATURE_DIR` from the JSON output. (If the `{SCRIPT}` placeholder was not substituted at install time, run `.specify/scripts/bash/check-prerequisites.sh --json --paths-only`, or on Windows `.specify/scripts/powershell/check-prerequisites.ps1 -Json -PathsOnly`.) Then load:
 
 - **Required**: `ripple-report.md` (from a previous scan)
 - **Required**: `tasks.md`, `spec.md`

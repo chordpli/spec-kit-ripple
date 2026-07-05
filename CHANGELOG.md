@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Convergence verdict in `check` — CONVERGED / NOT CONVERGED computed from findings still awaiting action, kept separate from the critical-path message so an open WARNING can't be mistaken for a clean bill
 - Coverage warning in `check` when files changed since the scan weren't covered by fix-induced analysis (points to `scan --diff`)
 - Compact 9-category rubric inlined in `check` so fix-induced analysis works in a standalone session
-- Cross-platform prerequisite scripts via `scripts:` frontmatter (`sh` + PowerShell) and the `{SCRIPT}` placeholder
+- Cross-platform prerequisite scripts via `scripts:` frontmatter (`sh` + PowerShell) and the `{SCRIPT}` placeholder, with an inline fallback for older Spec Kit CLIs that install extension commands without placeholder substitution
 
 ### Changed
 

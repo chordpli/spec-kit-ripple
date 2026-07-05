@@ -40,7 +40,7 @@ Examples:
 
 ### Step 1: Load Context
 
-Run `{SCRIPT}` from the repository root and parse `FEATURE_DIR` and `AVAILABLE_DOCS` from its JSON output. The script validates that `tasks.md` exists — if it reports an error, surface it and stop.
+Run `{SCRIPT}` from the repository root and parse `FEATURE_DIR` and `AVAILABLE_DOCS` from its JSON output. (If the `{SCRIPT}` placeholder was not substituted at install time — older Spec Kit CLIs don't render it for extension commands — run `.specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks`, or on Windows `.specify/scripts/powershell/check-prerequisites.ps1 -Json -RequireTasks -IncludeTasks`.) The script validates that `tasks.md` exists — if it reports an error, surface it and stop.
 
 Then load from `FEATURE_DIR`:
 
