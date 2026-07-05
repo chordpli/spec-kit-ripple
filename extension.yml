@@ -19,10 +19,13 @@ provides:
   commands:
     - name: "speckit.ripple.scan"
       file: "commands/speckit.ripple.scan.md"
+      description: "Analyze implementation for untested side effects and generate ripple-report.md"
     - name: "speckit.ripple.resolve"
       file: "commands/speckit.ripple.resolve.md"
+      description: "Interactively resolve ripple findings one by one — review cause, choose a fix strategy, and record a fix plan"
     - name: "speckit.ripple.check"
       file: "commands/speckit.ripple.check.md"
+      description: "Re-verify ripple report items and update resolution status"
 
 hooks:
   after_implement:
